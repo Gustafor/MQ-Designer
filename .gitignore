@@ -1,0 +1,22 @@
+# локальные артефакты и рабочие файлы — не публикуем
+chrome.log
+chrome2.log
+server.log
+gen-out.txt
+qa_out/
+QA_отчёты/
+doc-preview-ru.md
+doc-preview-en.md
+smoke.js
+smoke2.js
+smoke3.js
+smoke4.js
+test.md
+test-logic.js
+test-rk.js
+uitest.html
+rk-report.md
+gen-help.js
+*.log
+.DS_Store
+Thumbs.db

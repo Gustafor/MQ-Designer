@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RabbitMQ Designer</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" async onerror="window.__nojszip=1"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-ic">🐇</span>
+    <div class="brand-tx">
+      <div id="appTitle">RabbitMQ Designer</div>
+      <div id="appSub">визуальный проектировщик топологии брокера</div>
+    </div>
+  </div>
+
+  <nav class="menu">
+    <span class="menu-sep" id="menuPresetsLabel">Пресеты</span>
+    <button class="menu-item" data-act="blank">Пустая схема</button>
+    <button class="menu-item" data-act="myproject">Проект «myproject»</button>
+    <button class="menu-item" data-act="fanout">Пример: fan-out</button>
+    <button class="menu-item" data-act="import">Импорт definitions.json…</button>
+  </nav>
+
+  <div class="top-actions">
+    <button id="btnHelp" class="btn" title="Пояснения">? Пояснения</button>
+    <button id="btnDoc" class="btn">Документация</button>
+    <button id="btnExport" class="btn btn-primary">Экспорт</button>
+    <button id="langBtn" class="btn btn-ghost">EN</button>
+  </div>
+</header>
+
+<div class="main">
+  <aside class="sidebar" id="sidebar">
+    <section class="panel" id="palette">
+      <div class="panel-title">Палитра</div>
+      <div class="pal-hint">Нажмите, чтобы добавить объект. Затем перетащите его на холст и соедините порты.</div>
+      <button class="pal-item pal-producer" data-type="producer">+ Поставщик</button>
+      <button class="pal-item pal-exchange" data-type="exchange">+ Экчейндж</button>
+      <button class="pal-item pal-queue" data-type="queue">+ Очередь</button>
+      <button class="pal-item pal-consumer" data-type="consumer">+ Потребитель</button>
+    </section>
+
+    <section class="panel transport">
+      <div class="panel-title">Симуляция</div>
+      <div class="transport-row">
+        <button id="btnRun" class="btn btn-primary">Пауза</button>
+        <button id="btnClear" class="btn">Сброс</button>
+      </div>
+      <div class="speeds">
+        <span class="speed-lbl">Скорость:</span>
+        <button class="speed" data-s="0.5">0.5×</button>
+        <button class="speed on" data-s="1">1×</button>
+        <button class="speed" data-s="2">2×</button>
+        <button class="speed" data-s="4">4×</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title" data-i18n="metrics">Метрики</div>
+      <div class="metrics">
+        <div class="metric" data-k="mPublished"><span class="mk">Опубликовано</span><span class="mv">0</span></div>
+        <div class="metric" data-k="mRouted"><span class="mk">Промаршрутизовано</span><span class="mv">0</span></div>
+        <div class="metric" data-k="mReady"><span class="mk">В очередях</span><span class="mv">0</span></div>
+        <div class="metric" data-k="mUnacked"><span class="mk">Не подтверждено</span><span class="mv">0</span></div>
+        <div class="metric" data-k="mDelivered"><span class="mk">Доставлено (ack)</span><span class="mv">0</span></div>
+        <div class="metric metric-dead" data-k="mDead"><span class="mk">В мёртвые письма</span><span class="mv">0</span></div>
+        <div class="metric metric-dropped" data-k="mDropped"><span class="mk">Отброшено</span><span class="mv">0</span></div>
+      </div>
+    </section>
+
+    <section class="panel" id="issues">
+      <div class="panel-title">Проблемы схемы</div>
+    </section>
+  </aside>
+
+  <div class="canvas-wrap">
+    <svg id="canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="zoombar">
+      <button id="zoomIn" class="zbtn" title="Приблизить">+</button>
+      <button id="zoomFit" class="zbtn" title="Вписать схему в окно">⤢</button>
+      <button id="zoomOut" class="zbtn" title="Отдалить">−</button>
+      <span id="zoomPct" class="zpct">100%</span>
+    </div>
+  </div>
+
+  <aside class="sidebar sidebar-right">
+    <section class="panel sendpanel">
+      <div class="panel-title" data-i18n="sendBar">Отправка сообщения</div>
+      <div id="sendbar" class="sendbar"></div>
+    </section>
+    <section class="panel">
+      <div class="panel-title" data-i18n="log">Журнал</div>
+      <div id="log"></div>
+    </section>
+    <section class="panel" id="inspector">
+      <div class="panel-title">Свойства</div>
+    </section>
+  </aside>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="i18n.js"></script>
+<script src="presets.js"></script>
+<script src="core.js"></script>
+<script src="exporters.js"></script>
+<script src="help-content.js"></script>
+<script src="render.js"></script>
+<script>
+  // старт
+  window.addEventListener('DOMContentLoaded', function () {
+    RMQ.app.init();
+  });
+</script>
+</body>
+</html>
