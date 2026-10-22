@@ -30,7 +30,13 @@
     auto: { on: false, every: 3, acc: 0 }, // автоотправка: период в сек времени симуляции
     conn: null,                          // активное создание связи {from, mode:'click'|'drag', hoverId}
     spacePan: false,                     // зажат Space — режим панорамы
+    projectName: '',                     // имя текущего проекта (заполняет storage.js)
   };
+
+  // Любое изменение топологии → пометить проект как изменённый (автосохранение +
+  // предупреждение о несохранённых изменениях). storage.js может быть не загружен —
+  // тогда вызов безопасно игнорируется.
+  function touched() { if (RMQ.storage && RMQ.storage.markDirty) RMQ.storage.markDirty(); }
 
   function byId(id) { for (var i = 0; i < RMQ.state.nodes.length; i++) if (RMQ.state.nodes[i].id === id) return RMQ.state.nodes[i]; return null; }
   function byName(name) { for (var i = 0; i < RMQ.state.nodes.length; i++) if (RMQ.state.nodes[i].name === name) return RMQ.state.nodes[i]; return null; }
@@ -56,6 +62,7 @@
     if (type === 'producer') { var ex = byTypeFirst('exchange'); if (ex) node.targetExchange = ex.name; node.defaultRk = ''; }
     if (type === 'consumer') { /* очередь задаёт пользователь */ }
     s.nodes.push(node);
+    touched();
     RMQ.render();
     return node;
   };
@@ -91,6 +98,7 @@
     });
     if (requeued) log(tr(s.lang)('lgRequeued', { n: requeued, name: n.name }));
     if (s.selected && s.selected.id === id) s.selected = null;
+    touched();
     RMQ.render();
   };
 
@@ -109,6 +117,7 @@
       if (o.type === 'consumer' && o.queue === old) o.queue = newName;
     });
     s.messages.forEach(function (m) { if (m.loc && m.loc.name === old) m.loc.name = newName; });
+    touched();
     RMQ.render();
     return n;
   };
@@ -136,6 +145,7 @@
     if (kind === 'consume') { b.queue = dstName; }
     if (kind === 'publish') { a.targetExchange = dstName; }
     s.links.push(link);
+    touched();
     RMQ.render();
     return link;
   };
@@ -146,6 +156,7 @@
     if (l.kind === 'publish') { var p = byName(l.source); if (p) p.targetExchange = ''; }
     s.links = s.links.filter(function (x) { return x.id !== id; });
     if (s.selected && s.selected.id === id) s.selected = null;
+    touched();
     RMQ.render();
   };
 
@@ -575,6 +586,7 @@
     s.vhost = p.vhost; s.package = p.package;
     s.selected = null; s.messages = []; s.log = [];
     s.counters = { published: 0, routed: 0, delivered: 0, dead: 0, dropped: 0 };
+    touched();
     RMQ.render();
     // вписать схему в окно
     try { if (RMQ.app && RMQ.app.fitView) RMQ.app.fitView(); } catch (e) {}
@@ -584,7 +596,9 @@
     var s = RMQ.state;
     return {
       app: 'rabbitmq-designer', version: 1,
+      name: s.projectName || '',
       vhost: s.vhost, package: s.package, lang: s.lang,
+      exportIncludeUsers: !!s.exportIncludeUsers,
       nodes: s.nodes, links: s.links,
     };
   };
@@ -594,9 +608,12 @@
     s.nodes = obj.nodes.map(function (n) { n.id = n.id || ('n' + (seq++)); return n; });
     s.links = (obj.links || []).map(function (l) { l.id = l.id || ('l' + (seq++)); return l; });
     s.vhost = obj.vhost || '/'; s.package = obj.package || s.package;
+    s.exportIncludeUsers = !!obj.exportIncludeUsers;
+    s.projectName = obj.name || '';
     s.selected = null; s.messages = []; s.log = [];
     s.counters = { published: 0, routed: 0, delivered: 0, dead: 0, dropped: 0 };
     s.seq = 1; for (var i = 0; i < s.nodes.length; i++) { var m = parseInt(String(s.nodes[i].id).replace(/\D/g, ''), 10); if (m > s.seq) s.seq = m + 1; }
+    touched();
     RMQ.render();
   };
 

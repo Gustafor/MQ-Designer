@@ -70,6 +70,23 @@ body {
 .btn-warn { background: #3a3318; border-color: #6b5a1e; color: #f5d76b; }
 .btn-warn:hover { background: #4a401d; }
 .btn.tiny { padding: 4px 9px; font-size: 12px; }
+.btn.tiny.danger { background: #3a1a1e; border-color: #7a2e34; color: #ff9292; }
+.btn.tiny.danger:hover { background: #4d1f24; border-color: var(--red); }
+
+/* ------------------------- индикатор сохранения (шапка) ------------------- */
+.save-state {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+  font-size: 11.5px; padding: 4px 10px; border-radius: 20px; white-space: nowrap;
+  border: 1px solid var(--border2); background: transparent; color: var(--muted);
+}
+.save-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+.save-state:hover { color: var(--fg); border-color: var(--accent); }
+.save-state.saved::before { background: var(--green); }
+.save-state.saved { color: var(--muted); }
+.save-state.auto::before { background: var(--accent2); }
+.save-state.dirty { color: #f5d76b; border-color: #6b5a1e; background: #241a10; }
+.save-state.dirty::before { background: var(--amber); animation: save-pulse 1.6s ease-in-out infinite; }
+@keyframes save-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 
 /* --------------------------------- layout --------------------------------- */
 .main { display: flex; height: calc(100vh - 56px); }
@@ -310,6 +327,7 @@ body {
   box-shadow: 0 20px 60px rgba(0,0,0,.5);
 }
 .modal-wide { width: 960px; }
+.modal-narrow { width: 520px; }
 .modal-hd {
   padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; font-size: 15px;
   display: flex; align-items: center; justify-content: space-between;
@@ -338,6 +356,27 @@ body {
   margin: 0; padding: 14px; background: #0a0e14; color: #cdd9e5; font-family: var(--mono);
   font-size: 12px; line-height: 1.55; overflow: auto; max-height: 42vh; white-space: pre;
 }
+
+/* --------------------------- модалка проектов (storage.js) ---------------- */
+.pm-save { border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 12px; }
+.pm-row { display: flex; align-items: center; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+.pm-auto { font-size: 12px; color: var(--muted); }
+.pm-list-hd { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
+.pm-list { max-height: 34vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.pm-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+}
+.pm-item.current { border-color: var(--accent); background: #16233a; }
+.pm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-family: var(--mono); }
+.pm-date { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
+.pm-empty { font-size: 12.5px; color: var(--dim); padding: 12px; text-align: center; border: 1px dashed var(--border); border-radius: 8px; }
+.pm-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.pm-info { font-size: 11.5px; color: var(--dim); margin-left: auto; }
+
+/* --------------------- диалог несохранённых изменений --------------------- */
+.cf-text { font-size: 13px; color: var(--muted); line-height: 1.5; margin-bottom: 18px; }
+.cf-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 
 /* typecard — карточка-объяснение (инспектор / help / binding) */
 .typecard {

@@ -23,6 +23,9 @@
   function touchSel() { _selRev++; dirtyFull = true; }
   function markSend() { _sendRev++; dirtyFull = true; }
   function markLog() { _logRev++; }
+  // изменение топологии/настроек проекта → автосохранение + предупреждение
+  // о несохранённых изменениях (storage.js). Если модуль не загружен — no-op.
+  function touch() { if (RMQ.storage && RMQ.storage.markDirty) RMQ.storage.markDirty(); }
 
   function cap(x) { return x.charAt(0).toUpperCase() + x.slice(1); }
   function ttype(t) { return I18N.t('type' + cap(t)); }
@@ -869,7 +872,7 @@
     w.appendChild(fieldTextBox(T('fPackage'), s.package, function (v) { s.package = v || 'com.myproject.rabbitmq'; }, T('hintPkg')));
     var cb = document.createElement('label'); cb.className = 'fcheck';
     cb.innerHTML = '<input type="checkbox" ' + (s.exportIncludeUsers ? 'checked' : '') + '>' + T('fIncludeUsers');
-    cb.querySelector('input').addEventListener('change', function (e) { s.exportIncludeUsers = e.target.checked; });
+    cb.querySelector('input').addEventListener('change', function (e) { s.exportIncludeUsers = e.target.checked; touch(); });
     w.appendChild(cb);
     var hint = document.createElement('div'); hint.className = 'fhint'; hint.textContent = T('hintUsers'); w.appendChild(hint);
     return w;
@@ -887,7 +890,7 @@
     var l = document.createElement('label'); l.className = 'flabel'; l.textContent = label; w.appendChild(l);
     var i = document.createElement('input'); i.className = 'in'; i.value = value || ''; if (disabled) i.disabled = true;
     i.addEventListener('focus', function () { _typing = true; });
-    i.addEventListener('blur', function () { _typing = false; forceInspector(); onChange(i.value); RMQ.render(); });
+    i.addEventListener('blur', function () { _typing = false; forceInspector(); onChange(i.value); touch(); RMQ.render(); });
     i.addEventListener('keydown', function (e) { if (e.key === 'Enter') { i.blur(); } });
     w.appendChild(i);
     if (hint) { var h = document.createElement('div'); h.className = 'fhint'; h.textContent = hint; w.appendChild(h); }
@@ -904,7 +907,7 @@
       var v = parseInt(i.value, 10); if (isNaN(v)) v = min;
       v = Math.max(min, Math.min(max == null ? v : max, v));
       i.value = v;
-      forceInspector(); onChange(v); RMQ.render();
+      forceInspector(); onChange(v); touch(); RMQ.render();
     });
     w.appendChild(i);
     if (hint) { var h = document.createElement('div'); h.className = 'fhint'; h.textContent = hint; w.appendChild(h); }
@@ -916,7 +919,7 @@
     var s = document.createElement('select'); s.className = 'in in-select';
     opts.forEach(function (o) { var op = document.createElement('option'); op.value = o; op.textContent = o === '' ? (noneLabel || '—') : o; s.appendChild(op); });
     s.value = value;
-    s.addEventListener('change', function () { forceInspector(); onChange(s.value); RMQ.render(); });
+    s.addEventListener('change', function () { forceInspector(); onChange(s.value); touch(); RMQ.render(); });
     w.appendChild(s);
     if (hint) { var h = document.createElement('div'); h.className = 'fhint'; h.textContent = hint; w.appendChild(h); }
     box.appendChild(w);
@@ -924,7 +927,7 @@
   function fieldCheck(box, label, checked, onChange, hint) {
     var w = document.createElement('label'); w.className = 'fcheck';
     var i = document.createElement('input'); i.type = 'checkbox'; i.checked = checked;
-    i.addEventListener('change', function (e) { forceInspector(); onChange(e.target.checked); RMQ.render(); });
+    i.addEventListener('change', function (e) { forceInspector(); onChange(e.target.checked); touch(); RMQ.render(); });
     w.appendChild(i); w.appendChild(document.createTextNode(' ' + label)); box.appendChild(w);
     if (hint) { var h = document.createElement('div'); h.className = 'fhint'; h.textContent = hint; box.appendChild(h); }
   }
@@ -1253,6 +1256,7 @@
     // язык
     el.langBtn.addEventListener('click', function () {
       RMQ.state.lang = RMQ.state.lang === 'ru' ? 'en' : 'ru';
+      if (RMQ.storage && RMQ.storage.setLang) RMQ.storage.setLang(RMQ.state.lang);
       applyLang(); RMQ.render();
     });
 
@@ -1267,10 +1271,16 @@
       var act = m.getAttribute('data-act');
       if (!act) return;
       m.addEventListener('click', function () {
-        if (act === 'blank') RMQ.loadPreset('blank');
-        else if (act === 'myproject') RMQ.loadPreset('myproject');
-        else if (act === 'fanout') RMQ.loadPreset('fanout');
-        else if (act === 'import') doImport();
+        var run = function () {
+          if (act === 'blank') RMQ.loadPreset('blank');
+          else if (act === 'myproject') RMQ.loadPreset('myproject');
+          else if (act === 'fanout') RMQ.loadPreset('fanout');
+          else if (act === 'import') doImport();
+        };
+        // замена схемы = потенциальная потеря работы → предупреждаем,
+        // если есть несохранённые изменения
+        if (RMQ.storage && RMQ.storage.guard) RMQ.storage.guard(run);
+        else run();
       });
     });
 
@@ -1299,7 +1309,11 @@
     });
 
     applyLang();
-    RMQ.loadPreset('myproject');
+    // Схема: сначала пытаемся восстановить автосохранение (storage.js),
+    // и только если его нет — стартовый пресет.
+    var restored = RMQ.storage ? RMQ.storage.init() : false;
+    if (!restored) RMQ.loadPreset('myproject');
+    applyLang(); // на случай восстановленного языка интерфейса
     App.startRaf();
     renderTransport();
   };
@@ -1333,7 +1347,11 @@
     renderTransport();
     forceInspector(); // смена языка — карточка свойств тоже переводится
     document.documentElement.lang = RMQ.state.lang;
+    // индикатор сохранения и кнопка проектов — тоже переводятся
+    if (RMQ.storage && RMQ.storage.paint) RMQ.storage.paint();
+    var pb = $('#btnProjects'); if (pb) pb.textContent = T('projectsBtn');
   }
+  RMQ.applyLang = applyLang; // доступ из storage.js (восстановление языка)
 
   // ---------------------------------------------------------- import --------
   function doImport() {
@@ -1410,11 +1428,11 @@
       $('#em-title', root).textContent = T('exportTitle');
       // options
       var opts = $('#em-opts', root); opts.innerHTML = '';
-      opts.appendChild(optRow('vhost', T('exportVhost'), function (v) { return s.vhost = v || '/'; }, s.vhost));
-      opts.appendChild(optRow('pkg', T('exportPkg'), function (v) { s.package = v || 'com.myproject.rabbitmq'; }, s.package));
+      opts.appendChild(optRow('vhost', T('exportVhost'), function (v) { s.vhost = v || '/'; touch(); return s.vhost; }, s.vhost));
+      opts.appendChild(optRow('pkg', T('exportPkg'), function (v) { s.package = v || 'com.myproject.rabbitmq'; touch(); }, s.package));
       var cb = document.createElement('label'); cb.className = 'fcheck';
       cb.innerHTML = '<input type="checkbox" id="em-users" ' + (s.exportIncludeUsers ? 'checked' : '') + '>' + T('exportIncludeUsers');
-      $('#em-users', cb).addEventListener('change', function (e) { s.exportIncludeUsers = e.target.checked; refreshFiles(); });
+      $('#em-users', cb).addEventListener('change', function (e) { s.exportIncludeUsers = e.target.checked; touch(); refreshFiles(); });
       opts.appendChild(cb);
 
       var note = document.createElement('div'); note.className = 'em-note'; note.textContent = T('exportNote');
