@@ -78,7 +78,21 @@ exporters.js      — definitions.json / Spring AMQP Java / markdown-докум�
 help-content.js   — справочник
 storage.js        — автосохранение, проекты, защита от потери данных
 render.js         — SVG-холст, инспектор, тосты, RAF-цикл
+test-logic.js     — тесты логики (node test-logic.js)
+test-rk.js        — тесты routing key, unit + e2e (node test-rk.js)
 ```
+
+## Разработка
+
+Тесты запускаются в Node без установки зависимостей:
+
+```
+node test-logic.js
+node test-rk.js
+```
+
+Правила, инварианты продукта и стиль кода — в [CONTRIBUTING.md](CONTRIBUTING.md).
+О найденных уязвимостях сообщайте приватно, через вкладку **Security** — см. [SECURITY.md](SECURITY.md).
 
 ## Совместимость экспорта
 
@@ -86,4 +100,6 @@ render.js         — SVG-холст, инспектор, тосты, RAF-цик
 
 ## Лицензия
 
-MIT — используйте свободно.
+[MIT](LICENSE) — используйте свободно, в том числе в коммерческих проектах.
+
+Обратная связь и баги — через [Issues](https://github.com/Gustafor/MQ-Designer/issues).
