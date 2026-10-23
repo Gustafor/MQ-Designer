@@ -22,6 +22,22 @@
   };
   var DEBOUNCE = 600;        // мс, отложенная запись автосохранения
   var MAX_PROJECTS = 40;     // больше хранить бессмысленно
+  var MAX_AUTOSAVES = 8;     // слотов автосохранения (по одному на вкладку)
+
+  // Автосохранение — отдельный слот на вкладку. Иначе две вкладки пишут в один
+  // ключ и молча затирают работу друг друга, а после перезагрузки восстанавливается
+  // схема «соседней» вкладки. Слот живёт в sessionStorage: перезагрузка той же
+  // вкладки возвращает именно её состояние.
+  var TAB_ID = '';
+  try {
+    TAB_ID = window.sessionStorage.getItem('rmqdesigner:tab:v1') || '';
+    if (!TAB_ID) {
+      TAB_ID = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      window.sessionStorage.setItem('rmqdesigner:tab:v1', TAB_ID);
+    }
+  } catch (e) {
+    TAB_ID = 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
 
   var st = {
     dirty: false,        // изменения после последнего явного сохранения
@@ -110,6 +126,39 @@
     if (fn) fn();
   }
 
+  function autoKey() { return K.autosave + ':tab:' + TAB_ID; }
+  function autoSlots() {
+    var out = [];
+    try {
+      for (var i = 0; i < window.localStorage.length; i++) {
+        var k = window.localStorage.key(i);
+        if (k && k.indexOf(K.autosave) === 0) out.push(k);
+      }
+    } catch (e) {}
+    return out;
+  }
+  // Сначала свой слот (перезагрузка этой вкладки), иначе — самый свежий.
+  function findAutosave() {
+    var own = readJson(autoKey());
+    if (own && own.data && Array.isArray(own.data.nodes)) return own;
+    var best = null;
+    autoSlots().forEach(function (k) {
+      var v = readJson(k);
+      if (!v || !v.data || !Array.isArray(v.data.nodes)) return;
+      if (!best || (v.savedAt || 0) > (best.savedAt || 0)) best = v;
+    });
+    return best;
+  }
+  function pruneAutosaves() {
+    var items = autoSlots().map(function (k) { return { k: k, v: readJson(k) }; })
+      .filter(function (x) { return x.v && x.v.savedAt; })
+      .sort(function (a, b) { return b.v.savedAt - a.v.savedAt; });
+    var cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+    items.forEach(function (x, i) {
+      if (i >= MAX_AUTOSAVES || x.v.savedAt < cutoff) lsDel(x.k);
+    });
+  }
+
   function scheduleAutosave() {
     if (timer) clearTimeout(timer);
     timer = setTimeout(writeAutosave, DEBOUNCE);
@@ -119,7 +168,7 @@
     if (!st.autoEnabled || !st.lsOk) return;
     var data = snapshot();
     if (!data) return;
-    if (writeJson(K.autosave, { v: 1, savedAt: Date.now(), data: data })) {
+    if (writeJson(autoKey(), { v: 1, tab: TAB_ID, savedAt: Date.now(), data: data })) {
       st.autoAt = Date.now();
       paint();
     }
@@ -154,17 +203,17 @@
     return name;
   }
   function saveProject(name) {
-    name = String(name || '').trim() || defaultName();
+    name = String(name || '').trim().slice(0, 60) || defaultName();
     var data = snapshot();
     if (!data) return false;
     data.name = name;
     var all = allProjects();
-    all[name] = { name: name, savedAt: Date.now(), data: data };
-    var keys = Object.keys(all);
-    if (keys.length > MAX_PROJECTS) {
-      keys.sort(function (a, b) { return (all[b].savedAt || 0) - (all[a].savedAt || 0); });
-      while (keys.length > MAX_PROJECTS) { delete all[keys.pop()]; }
+    // Лимит не должен молча удалять старый проект: отказываем и просим освободить место.
+    if (!all[name] && Object.keys(all).length >= MAX_PROJECTS) {
+      toast(t('toastProjectsLimit', { max: MAX_PROJECTS }));
+      return false;
     }
+    all[name] = { name: name, savedAt: Date.now(), data: data };
     if (!writeJson(K.projects, all)) return false;
     st.current = name;
     st.savedAt = Date.now();
@@ -197,7 +246,7 @@
     var all = allProjects();
     if (!all[name]) return false;
     delete all[name];
-    writeJson(K.projects, all);
+    if (!writeJson(K.projects, all)) return false;
     if (st.current === name) { st.current = ''; st.savedAt = null; }
     paint();
     toast(t('toastProjectDeleted', { name: name }));
@@ -227,6 +276,11 @@
     paint();
     toast(t('toastFileSaved'));
   }
+  function uniqueProjectName(base, all) {
+    var name = base, i = 2;
+    while (all[name]) { name = base + '-' + i; i++; }
+    return name;
+  }
   function importFile(file) {
     if (!file) return;
     var rd = new FileReader();
@@ -234,15 +288,33 @@
       var obj;
       try { obj = JSON.parse(rd.result); }
       catch (e) { toast(t('toastFileBad', { err: e.message })); return; }
-      if (!obj || obj.app !== 'rabbitmq-designer' || !obj.nodes) { toast(t('toastFileNotProject')); return; }
-      var name = (obj.name || file.name.replace(/\.rmq\.json$/i, '').replace(/\.json$/i, '') || 'imported');
+      if (!obj || obj.app !== 'rabbitmq-designer' || !Array.isArray(obj.nodes)) { toast(t('toastFileNotProject')); return; }
+      var name = String(obj.name || file.name.replace(/\.rmq\.json$/i, '').replace(/\.json$/i, '') || 'imported').trim().slice(0, 60) || 'imported';
       st.suspended = true;
       try { RMQ.load(obj); } catch (e) { st.suspended = false; toast(t('toastFileNotProject')); return; }
       st.suspended = false;
-      // импортированный файл сразу попадает в список проектов
+
       var all = allProjects();
+      // Импорт не должен молча затирать одноимённый проект.
+      if (all[name] && !window.confirm(t('confirmOverwriteProject', { name: name }))) {
+        name = uniqueProjectName(name, all);
+      }
+      if (!all[name] && Object.keys(all).length >= MAX_PROJECTS) {
+        // Схема уже загружена, но в проекты не попала — честно помечаем как несохранённую.
+        st.current = ''; st.savedAt = null; st.dirty = true;
+        if (RMQ.state) RMQ.state.projectName = '';
+        toast(t('toastProjectsLimit', { max: MAX_PROJECTS }));
+        paint();
+        return;
+      }
       all[name] = { name: name, savedAt: Date.now(), data: obj };
-      writeJson(K.projects, all);
+      if (!writeJson(K.projects, all)) {
+        // Запись не удалась (квота/private mode): не выдаём успех и не снимаем dirty.
+        st.current = ''; st.savedAt = null; st.dirty = true;
+        if (RMQ.state) RMQ.state.projectName = '';
+        paint();
+        return;
+      }
       st.current = name; st.savedAt = Date.now(); st.dirty = false;
       if (RMQ.state) RMQ.state.projectName = name;
       markExplicitlySaved(name, fingerprint(obj));
@@ -278,10 +350,29 @@
   }
 
   // ------------------------------------------------------------- guard: диалог ---
+  // Возврат фокуса после закрытия модалки (a11y): запоминаем элемент, с которого
+  // её открыли, но не тащим фокус из уже открытой модалки.
+  var lastModalFocus = null;
+  function rememberFocus() {
+    var a = document.activeElement;
+    if (!a || a === document.body) return;
+    if (a.closest && a.closest('.modal-back')) return;
+    lastModalFocus = a;
+  }
+  function restoreFocus() {
+    if (document.querySelector('.modal-back.show')) return; // открыта другая модалка
+    var a = lastModalFocus;
+    lastModalFocus = null;
+    if (a && a.focus && document.contains(a)) a.focus();
+  }
+
   var confirmModal = (function () {
     var root, cb = null;
     function build() {
       root = document.createElement('div'); root.className = 'modal-back';
+      root.setAttribute('role', 'dialog');
+      root.setAttribute('aria-modal', 'true');
+      root.setAttribute('tabindex', '-1');
       root.innerHTML =
         '<div class="modal modal-narrow">' +
         '<div class="modal-hd"><span id="cf-title"></span><button class="x" id="cf-close">×</button></div>' +
@@ -301,11 +392,13 @@
     }
     function done(choice) {
       if (root) root.classList.remove('show');
+      restoreFocus();
       var fn = cb; cb = null;
       if (fn) fn(choice);
     }
     function open(onChoice) {
       if (!root) build();
+      rememberFocus();
       cb = onChoice;
       $('#cf-title', root).textContent = t('unsavedTitle');
       $('#cf-text', root).textContent = t('unsavedText');
@@ -348,6 +441,9 @@
     var root, listEl, nameEl;
     function build() {
       root = document.createElement('div'); root.className = 'modal-back';
+      root.setAttribute('role', 'dialog');
+      root.setAttribute('aria-modal', 'true');
+      root.setAttribute('tabindex', '-1');
       root.innerHTML =
         '<div class="modal modal-narrow">' +
         '<div class="modal-hd"><span id="pm-title"></span><button class="x" id="pm-close">×</button></div>' +
@@ -385,6 +481,7 @@
     }
     function hide() {
       if (root) root.classList.remove('show');
+      restoreFocus();
     }
     function close() {
       hide();
@@ -392,6 +489,7 @@
     }
     function open(focusName) {
       if (!root) build();
+      rememberFocus();
       var T = t;
       $('#pm-title', root).textContent = T('projectsTitle');
       $('#pm-namelabel', root).textContent = T('projectNameLabel');
@@ -405,7 +503,7 @@
       $('#pm-auto', root).checked = st.autoEnabled;
       refresh();
       root.classList.add('show');
-      if (focusName && nameEl) { nameEl.focus(); nameEl.select(); }
+      if (nameEl) { nameEl.focus(); nameEl.select(); }
     }
     function refresh() {
       if (!root) return;
@@ -450,7 +548,8 @@
 
     // восстановление автосохранения
     var restored = false;
-    var as = readJson(K.autosave);
+    pruneAutosaves();
+    var as = findAutosave();
     // пустая схема (0 узлов) — тоже валидное состояние, восстанавливаем её
     if (as && as.data && as.data.app === 'rabbitmq-designer' && Array.isArray(as.data.nodes)) {
       st.suspended = true;
@@ -484,6 +583,12 @@
     if (btn) btn.addEventListener('click', function () { projectsModal.open(false); });
     var chip = document.getElementById('saveState');
     if (chip) chip.addEventListener('click', function () { projectsModal.open(false); });
+
+    // Другая вкладка изменила список проектов — обновляем открытое окно.
+    // Автосохранения у вкладок раздельные, поэтому состояние здесь не трогаем.
+    window.addEventListener('storage', function (e) {
+      if (e.key === K.projects) projectsModal.refresh();
+    });
 
     // Ctrl+S — сохранить проект
     document.addEventListener('keydown', function (e) {

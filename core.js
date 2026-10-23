@@ -116,7 +116,14 @@
       if (o.type === 'queue' && o.dlx === old) o.dlx = newName;
       if (o.type === 'consumer' && o.queue === old) o.queue = newName;
     });
-    s.messages.forEach(function (m) { if (m.loc && m.loc.name === old) m.loc.name = newName; });
+    s.messages.forEach(function (m) {
+      var loc = m.loc; if (!loc) return;
+      if (loc.name === old) loc.name = newName;
+      if (loc.fromName === old) loc.fromName = newName;
+      if (loc.toName === old) loc.toName = newName;
+      if (loc.consumer === old) loc.consumer = newName;
+      if (loc.queueName === old) loc.queueName = newName;
+    });
     touched();
     RMQ.render();
     return n;
@@ -184,7 +191,9 @@
     var match = bm['x-match'] || 'all';
     var keys = Object.keys(bm).filter(function (k) { return k !== 'x-match'; });
     if (keys.length === 0) return true;
-    var ok = function (k) { return (k in headers) && String(headers[k]) === String(bm[k]); };
+    // только собственные свойства: иначе 'toString'/'constructor' матчатся по прототипу
+    var has = function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); };
+    var ok = function (k) { return has(headers, k) && String(headers[k]) === String(bm[k]); };
     return match === 'all' ? keys.every(ok) : keys.some(ok);
   }
   RMQ.bindingMatches = function (exchange, binding, rk, headers) {
@@ -399,6 +408,7 @@
         born: now(),
       };
       s.messages.push(m);
+      s.counters.published++;
     }
     var hs = hdrs ? ' h={' + Object.keys(hdrs).map(function (k) { return k + '=' + hdrs[k]; }).join(',') + '}' : '';
     log('▶ ' + producerName + ' → ' + (exName || '?') + ' ×' + count + ' rk=' + (rk || '∅') + hs);
@@ -507,7 +517,8 @@
 
   function arriveExchange(m, ex) {
     var s = RMQ.state;
-    s.counters.published++;
+    // «Опубликовано» считает публикации поставщика (в sim.send), а не каждый
+    // exchange-хоп: иначе цепочка exchange→exchange завышает метрику.
     var targets = RMQ.matchQueues(ex, m.rk, m.headers || {});
     if (targets.length === 0) {
       s.counters.dropped++;
@@ -602,17 +613,111 @@
       nodes: s.nodes, links: s.links,
     };
   };
+  // Схема приходит из файла, который мог прислать кто угодно. Всё, что попадает
+  // в состояние, приводится к известной форме: типы — по белому списку, строки
+  // ограничены по длине, ids уникальны, headers — только собственные примитивы.
+  var NODE_TYPES = { producer: 1, exchange: 1, queue: 1, consumer: 1 };
+  var EX_TYPES = { topic: 1, direct: 1, fanout: 1, headers: 1 };
+  var LINK_KINDS = { publish: 1, binding: 1, consume: 1 };
+  var LOAD_LIMITS = { nodes: 400, links: 1200, name: 160, text: 400, headers: 40 };
+
+  function loadStr(v, max) {
+    if (v == null || typeof v === 'object') return '';
+    return String(v).slice(0, max || LOAD_LIMITS.name);
+  }
+  function loadNum(v, def, min, max) {
+    var n = Number(v);
+    if (!isFinite(n)) return def;
+    return Math.min(max, Math.max(min, n));
+  }
+  function loadHeaders(h) {
+    var out = {}, keys;
+    if (!h || typeof h !== 'object' || Array.isArray(h)) return out;
+    keys = Object.keys(h).slice(0, LOAD_LIMITS.headers);
+    keys.forEach(function (k) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') return;
+      var v = h[k];
+      if (v == null || typeof v === 'object') return;
+      out[String(k).slice(0, 80)] = loadStr(v, LOAD_LIMITS.text);
+    });
+    return out;
+  }
+
   RMQ.load = function (obj) {
-    if (!obj || obj.app !== 'rabbitmq-designer' || !obj.nodes) throw new Error('bad file');
-    var s = RMQ.state, seq = 0;
-    s.nodes = obj.nodes.map(function (n) { n.id = n.id || ('n' + (seq++)); return n; });
-    s.links = (obj.links || []).map(function (l) { l.id = l.id || ('l' + (seq++)); return l; });
-    s.vhost = obj.vhost || '/'; s.package = obj.package || s.package;
+    if (!obj || obj.app !== 'rabbitmq-designer' || !Array.isArray(obj.nodes)) throw new Error('bad file');
+    var s = RMQ.state;
+    var used = {}, seq = 1;
+    function takeId(v, prefix) {
+      var id = (typeof v === 'string' && /^[A-Za-z0-9_-]{1,60}$/.test(v) && !used[v]) ? v : '';
+      if (!id) { do { id = prefix + (seq++); } while (used[id]); }
+      used[id] = true;
+      return id;
+    }
+
+    var nodes = [];
+    obj.nodes.slice(0, LOAD_LIMITS.nodes).forEach(function (raw) {
+      if (!raw || typeof raw !== 'object' || !NODE_TYPES[raw.type]) return;
+      var type = raw.type;
+      var n = {
+        id: takeId(raw.id, 'n'), type: type, name: loadStr(raw.name),
+        x: loadNum(raw.x, 0, -100000, 100000), y: loadNum(raw.y, 0, -100000, 100000),
+      };
+      if (type === 'producer') {
+        n.targetExchange = loadStr(raw.targetExchange);
+        n.defaultRk = loadStr(raw.defaultRk, LOAD_LIMITS.text);
+        n.fail = loadNum(raw.fail, 0, 0, 100);
+      } else if (type === 'exchange') {
+        n.exType = EX_TYPES[raw.exType] ? raw.exType : 'topic';
+        n.durable = raw.durable !== false;
+        n.autoDelete = !!raw.autoDelete;
+      } else if (type === 'queue') {
+        n.durable = raw.durable !== false;
+        n.autoDelete = !!raw.autoDelete;
+        n.ttl = Math.round(loadNum(raw.ttl, 0, 0, 7 * 24 * 3600 * 1000));
+        n.dlx = loadStr(raw.dlx);
+        n.xDlrk = loadStr(raw.xDlrk, LOAD_LIMITS.text);
+      } else {
+        n.queue = loadStr(raw.queue);
+        n.prefetch = Math.round(loadNum(raw.prefetch, 10, 1, 1000));
+        n.process = Math.round(loadNum(raw.process, 800, 1, 600000));
+        n.fail = loadNum(raw.fail, 0, 0, 100);
+      }
+      nodes.push(n);
+    });
+    s.nodes = nodes;
+
+    var names = {};
+    nodes.forEach(function (n) { if (n.name) names[n.name] = n; });
+
+    var links = [];
+    (Array.isArray(obj.links) ? obj.links : []).slice(0, LOAD_LIMITS.links).forEach(function (raw) {
+      if (!raw || typeof raw !== 'object') return;
+      var src = loadStr(raw.source), dst = loadStr(raw.destination);
+      var a = names[src], b = names[dst];
+      if (!a || !b) return;                       // висячая связь
+      var kind = RMQ.linkKind(a, b);
+      if (!kind) return;
+      if (raw.kind && (!LINK_KINDS[raw.kind] || raw.kind !== kind)) return; // kind обязан соответствовать концам
+      var l = { id: takeId(raw.id, 'l'), source: src, destination: dst, kind: kind };
+      if (kind === 'binding') {
+        l.rk = loadStr(raw.rk, LOAD_LIMITS.text);
+        l.headers = loadHeaders(raw.headers);
+        l.xmatch = raw.xmatch === 'any' ? 'any' : 'all';
+      }
+      links.push(l);
+    });
+    s.links = links;
+
+    s.vhost = loadStr(obj.vhost, 100) || '/';
+    s.package = loadStr(obj.package, 200) || 'com.myproject.rabbitmq';
     s.exportIncludeUsers = !!obj.exportIncludeUsers;
-    s.projectName = obj.name || '';
+    s.projectName = loadStr(obj.name, 120);
     s.selected = null; s.messages = []; s.log = [];
     s.counters = { published: 0, routed: 0, delivered: 0, dead: 0, dropped: 0 };
-    s.seq = 1; for (var i = 0; i < s.nodes.length; i++) { var m = parseInt(String(s.nodes[i].id).replace(/\D/g, ''), 10); if (m > s.seq) s.seq = m + 1; }
+    // seq — по ВСЕМ id (узлы и связи), иначе новые связи могут совпасть с существующими
+    var mx = 0;
+    Object.keys(used).forEach(function (id) { var m = parseInt(String(id).replace(/\D/g, ''), 10); if (m > mx) mx = m; });
+    s.seq = Math.max(seq, mx + 1);
     touched();
     RMQ.render();
   };

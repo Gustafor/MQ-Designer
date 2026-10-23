@@ -6,6 +6,14 @@
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
   var NS = 'http://www.w3.org/2000/svg';
+  var EX_TYPES = { topic: 1, direct: 1, fanout: 1, headers: 1 };
+  // Всё, что пришло из файла проекта, при вставке в innerHTML проходит через esc().
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function safeExType(t) { return EX_TYPES[t] ? t : 'topic'; }
 
   var el = {}; // DOM refs
   var _typing = false;
@@ -701,10 +709,11 @@
   // карточка-объяснение типа exchange (обучение)
   function exchangeTypeCard(box, exType) {
     var T = I18N.t;
+    var type = safeExType(exType);
     var d = document.createElement('div');
-    d.className = 'typecard typecard-' + exType;
-    d.innerHTML = '<div class="tc-title">' + T('fType') + ': <b>' + exType + '</b></div>' +
-      '<div class="tc-body">' + T('desc' + cap(exType)) + '</div>';
+    d.className = 'typecard typecard-' + type;
+    d.innerHTML = '<div class="tc-title">' + T('fType') + ': <b>' + esc(type) + '</b></div>' +
+      '<div class="tc-body">' + T('desc' + cap(type)) + '</div>';
     box.appendChild(d);
   }
   // шпаргалка по четырём типам (обучение)
@@ -734,8 +743,12 @@
     }
     var rows = '<table class="exb-tbl"><tr><th>' + T('fDest') + '</th><th>' + T('fRoutingKey') + '</th></tr>';
     bs.forEach(function (b) {
-      var hdr = (b.headers && Object.keys(b.headers).length) ? ' {' + Object.keys(b.headers).map(function (k) { return k + '=' + b.headers[k]; }).join(';') + '}' : '';
-      rows += '<tr><td><code>' + b.destination + '</code></td><td><code>' + (b.rk || (n.exType === 'fanout' ? '—' : '·')) + '</code>' + hdr + '</td></tr>';
+      var hdr = '';
+      if (b.headers && Object.keys(b.headers).length) {
+        hdr = ' {' + Object.keys(b.headers).map(function (k) { return esc(k) + '=' + esc(b.headers[k]); }).join('; ') + '}';
+      }
+      rows += '<tr><td><code>' + esc(b.destination) + '</code></td><td><code>' +
+        esc(b.rk || (n.exType === 'fanout' ? '—' : '·')) + '</code>' + hdr + '</td></tr>';
     });
     rows += '</table>';
     d.innerHTML = h + rows;
@@ -751,14 +764,14 @@
     var d = document.createElement('div');
     d.className = 'typecard typecard-headers';
     var h = '<div class="tc-title">☠ ' + T('deadPath') + '</div>';
-    var rk = (n.xDlrk && n.xDlrk !== '') ? ('<code>' + n.xDlrk + '</code>') : '<span class="dim">∅</span>';
-    h += '<div class="tc-body-sub">' + n.dlx + ' (' + dlx.exType + ') · rk=' + rk + '</div>';
+    var rk = (n.xDlrk && n.xDlrk !== '') ? ('<code>' + esc(n.xDlrk) + '</code>') : '<span class="dim">∅</span>';
+    h += '<div class="tc-body-sub">' + esc(n.dlx) + ' (' + esc(safeExType(dlx.exType)) + ') · rk=' + rk + '</div>';
     if (!dl) {
       h += '<div class="tc-warn">⚠ ' + T('deadPathLost') + '</div>';
       d.innerHTML = h; box.appendChild(d); return;
     }
-    var qs = dl.queues.length ? dl.queues.map(function (q) { return '<code>' + q.name + '</code>'; }).join(', ') : '<b>∅</b>';
-    h += '<div class="tc-body">' + n.dlx + ' <span class="arw">→</span> ' + qs + '</div>';
+    var qs = dl.queues.length ? dl.queues.map(function (q) { return '<code>' + esc(q.name) + '</code>'; }).join(', ') : '<b>∅</b>';
+    h += '<div class="tc-body">' + esc(n.dlx) + ' <span class="arw">→</span> ' + qs + '</div>';
     if (!dl.queues.length) h += '<div class="tc-warn">⚠ ' + T('deadPathLost') + '</div>';
     d.innerHTML = h;
     box.appendChild(d);
@@ -771,12 +784,12 @@
       var dlxNode = RMQ._.byName(n.dlx);
       if (dlxNode) {
         var warns = RMQ.computeProblems().filter(function (p) { return p.level === 'warn' && p.msg.indexOf(n.name) === 0 && p.msg.indexOf('DLX') >= 0; });
-        lines.push('<b>x-dead-letter-exchange</b>: <code>' + n.dlx + '</code> (' + dlxNode.exType + ')');
-        warns.forEach(function (w) { lines.push('<div class="tc-warn">' + w.msg + '</div>'); });
+        lines.push('<b>x-dead-letter-exchange</b>: <code>' + esc(n.dlx) + '</code> (' + esc(safeExType(dlxNode.exType)) + ')');
+        warns.forEach(function (w) { lines.push('<div class="tc-warn">' + esc(w.msg) + '</div>'); });
       }
     }
     if (n.ttl > 0) lines.push('<b>x-message-ttl</b>: ' + (n.ttl / 1000).toFixed(n.ttl % 1000 ? 1 : 0) + ' c');
-    if (n.xDlrk) lines.push('<b>x-dead-letter-routing-key</b>: <code>' + n.xDlrk + '</code>');
+    if (n.xDlrk) lines.push('<b>x-dead-letter-routing-key</b>: <code>' + esc(n.xDlrk) + '</code>');
     if (!lines.length) lines.push(T('hintDlx'));
     var d = document.createElement('div');
     d.className = 'typecard typecard-queue';
@@ -1286,6 +1299,8 @@
 
     // keyboard: delete / esc
     document.addEventListener('keydown', function (e) {
+      // при открытой модалке клавиши обрабатывает она сама — не трогаем холст
+      if (document.querySelector('.modal-back.show')) return;
       var inField = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
       if ((e.key === 'Delete' || e.key === 'Backspace') && RMQ.state.selected && !inField) {
         var s = RMQ.state.selected;
@@ -1303,6 +1318,18 @@
       if ((e.key === '=' || e.key === '+') && !inField) App.zoomBy(1.2);
       if (e.key === '-' && !inField) App.zoomBy(1 / 1.2);
       if (e.key === '0' && !inField) App.fitView();
+    });
+    // Focus trap: Tab не уходит из открытой модалки на страницу под оверлеем.
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Tab') return;
+      var open = document.querySelector('.modal-back.show');
+      if (!open) return;
+      var f = open.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      if (!f.length) return;
+      var first = f[0], last = f[f.length - 1];
+      if (!open.contains(document.activeElement)) { e.preventDefault(); first.focus(); return; }
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     });
     document.addEventListener('keyup', function (e) {
       if (e.key === ' ') { RMQ.state.spacePan = false; el.canvas.classList.remove('panmode'); }
@@ -1403,9 +1430,12 @@
   //  EXPORT MODAL
   // =========================================================================
   var exportModal = (function () {
-    var root, filePreview, filesEl, fileName;
+    var root, filePreview, filesEl, fileName, lastFocus = null;
     function build() {
       root = document.createElement('div'); root.className = 'modal-back';
+      root.setAttribute('role', 'dialog');
+      root.setAttribute('aria-modal', 'true');
+      root.setAttribute('tabindex', '-1');
       root.innerHTML =
         '<div class="modal">' +
         '<div class="modal-hd"><span id="em-title"></span><button class="x" id="em-close">×</button></div>' +
@@ -1418,13 +1448,16 @@
         '</div>' +
         '</div>';
       root.addEventListener('click', function (e) { if (e.target === root) close(); });
+      root.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
       $('#em-close', root).addEventListener('click', close);
       document.body.appendChild(root);
     }
     function open() {
       if (!root) build();
+      lastFocus = document.activeElement;
       var s = RMQ.state, T = I18N.t;
       root.classList.add('show');
+      root.focus();
       $('#em-title', root).textContent = T('exportTitle');
       // options
       var opts = $('#em-opts', root); opts.innerHTML = '';
@@ -1442,7 +1475,11 @@
       $('#em-copy', root).addEventListener('click', function () { copyPreview(); });
       refreshFiles();
     }
-    function close() { root.classList.remove('show'); }
+    function close() {
+      root.classList.remove('show');
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+      lastFocus = null;
+    }
     function currentBundle() {
       var s = RMQ.state;
       return RMQ.export.all({ vhost: s.vhost, pkg: s.package, includeUsers: s.exportIncludeUsers });
@@ -1531,12 +1568,16 @@
   //  DOCUMENTATION MODAL
   // =========================================================================
   var docModal = (function () {
-    var root;
+    var root, lastFocus = null;
     function build() {
       root = document.createElement('div'); root.className = 'modal-back';
+      root.setAttribute('role', 'dialog');
+      root.setAttribute('aria-modal', 'true');
+      root.setAttribute('tabindex', '-1');
       root.innerHTML = '<div class="modal modal-wide"><div class="modal-hd"><span id="dm-title"></span><span class="dm-actions"><button class="btn tiny" id="dm-md"></button><button class="btn tiny" id="dm-print"></button><button class="x" id="dm-close">×</button></span></div>' +
         '<div class="modal-bd"><div class="doc-view" id="dm-view"></div></div></div>';
       root.addEventListener('click', function (e) { if (e.target === root) close(); });
+      root.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
       $('#dm-close', root).addEventListener('click', close);
       $('#dm-md', root).addEventListener('click', function () { dlFile('documentation.md', RMQ.export.markdown({ vhost: RMQ.state.vhost, pkg: RMQ.state.package })); });
       $('#dm-print', root).addEventListener('click', function () { window.print(); });
@@ -1544,13 +1585,19 @@
     }
     function open() {
       if (!root) build();
+      lastFocus = document.activeElement;
       root.classList.add('show');
+      root.focus();
       $('#dm-title', root).textContent = I18N.t('docTitle');
       $('#dm-md', root).textContent = I18N.t('dlMarkdown');
       $('#dm-print', root).textContent = '🖨 ' + (RMQ.state.lang === 'ru' ? 'Печать / PDF' : 'Print / PDF');
       renderMd(RMQ.export.markdown({ vhost: RMQ.state.vhost, pkg: RMQ.state.package }), $('#dm-view', root));
     }
-    function close() { root.classList.remove('show'); }
+    function close() {
+      root.classList.remove('show');
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+      lastFocus = null;
+    }
     function dlFile(name, text) { var b = new Blob([text], { type: 'text/plain;charset=utf-8' }); var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 400); }
 
     // минималистичный md→html
@@ -1592,17 +1639,21 @@
   //  Контент: help-content.js (window.HELP)
   // =========================================================================
   var helpModal = (function () {
-    var root, view, tabsEl, cur = 0;
+    var root, view, tabsEl, cur = 0, lastFocus = null;
     function lang() { return (RMQ.state.lang === 'en') ? 'en' : 'ru'; }
     function H() { return window.HELP || { levels: [] }; }
 
     function build() {
       root = document.createElement('div'); root.className = 'modal-back';
+      root.setAttribute('role', 'dialog');
+      root.setAttribute('aria-modal', 'true');
+      root.setAttribute('tabindex', '-1');
       root.innerHTML = '<div class="modal modal-wide"><div class="modal-hd"><span id="hm-title"></span>' +
         '<span class="dm-actions"><button class="x" id="hm-close">×</button></span></div>' +
         '<div class="help-tabs" id="hm-tabs"></div>' +
         '<div class="modal-bd"><div class="help-view" id="hm-view"></div></div></div>';
       root.addEventListener('click', function (e) { if (e.target === root) close(); });
+      root.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
       $('#hm-close', root).addEventListener('click', close);
       tabsEl = $('#hm-tabs', root);
       view = $('#hm-view', root);
@@ -1807,12 +1858,18 @@
 
     function open() {
       if (!root) build();
+      lastFocus = document.activeElement;
       root.classList.add('show');
+      root.focus();
       $('#hm-title', root).textContent = I18N.t('hTitle');
       renderTabs();
       renderLevel();
     }
-    function close() { if (root) root.classList.remove('show'); }
+    function close() {
+      if (root) root.classList.remove('show');
+      if (lastFocus && lastFocus.focus) lastFocus.focus();
+      lastFocus = null;
+    }
     return { open: open, close: close };
   })();
 

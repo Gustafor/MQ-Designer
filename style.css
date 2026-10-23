@@ -528,6 +528,24 @@ body {
 .doc-view pre code { border: none; padding: 0; color: #cdd9e5; }
 .doc-view .dli, .doc-view .dni { margin: 4px 0; padding-left: 6px; }
 
+/* --------------------------------- focus ---------------------------------- */
+/* Видимый фокус только для клавиатуры: мышь его не показывает */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.btn:focus-visible, .zbtn:focus-visible, .speed:focus-visible,
+.pal-item:focus-visible, .em-fname:focus-visible, .pm-item:focus-visible,
+.menu-item:focus-visible, .x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-color: var(--accent);
+}
+/* У полей ввода свой индикатор — border-color, без двойной рамки */
+.in:focus-visible { outline: none; }
+/* Контейнер модалки получает фокус программно (tabindex="-1") */
+.modal-back:focus, .modal-back:focus-visible { outline: none; }
+
 /* --------------------------------- print ---------------------------------- */
 @media print {
   body * { visibility: hidden; }

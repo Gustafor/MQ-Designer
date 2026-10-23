@@ -136,14 +136,17 @@ t('OK', 'A08 fail=100 → nack → dead=1, письмо в dlq (topic DLX #)', (
   assert(R.state.messages.some(m => m.loc.name === 'dlq'), 'в dlq нет письма');
 });
 
-// A09 известная ловушка: direct-DLX "#" не ловит (соответствует реальному брокеру)
-t('OK', 'A09 direct-DLX rk="#": мёртвое письмо с rk="a" НЕ доходит (как в реальном RabbitMQ)', () => {
+// A09 известная ловушка: direct-DLX "#" не ловит (соответствует реальному брокеру).
+// Семантика счётчиков (BA-4): dead++ только если мёртвое письмо реально доставлено
+// в DLQ; письмо, которому DLX не нашёл цели, — потеря (dropped++), а не «мёртвое».
+t('OK', 'A09 direct-DLX rk="#": мёртвое письмо с rk="a" НЕ доходит, dead=0, dropped=1', () => {
   buildTopology(); addDlx();
   R._.byName('q1').dlx = 'dlx';
   R._.byName('dlx').exType = 'direct';
   R._.byName('c1').fail = 100; R._.byName('c1').process = 50;
   R.sim.send('p1', 'a', 1); runToIdle();
-  assert(R.state.counters.dead === 1, 'dead=' + R.state.counters.dead);
+  assert(R.state.counters.dead === 0, 'dead=' + R.state.counters.dead + ' (письмо не дошло до DLQ — не «мёртвое»)');
+  assert(R.state.counters.dropped === 1, 'dropped=' + R.state.counters.dropped);
   assert(!R.state.messages.some(m => m.loc.name === 'dlq'), 'письмо попало в dlq — неверно');
 });
 
@@ -228,10 +231,11 @@ t('OK', 'A22 export.all → {files, notes}: у каждого файла ест�
   springFiles.forEach(f => assert(b.notes[f] && b.notes[f].length > 5, 'нет note: ' + f));
 });
 
-console.log('=== ЧАСТЬ B: БАГИ (тест = правильное поведение; провал = баг воспроизведён) ===\n');
+console.log('=== ЧАСТЬ B: РЕГРЕССИИ (бывшие баги; тест проходит = баг не вернулся) ===\n');
 
 // B01 sim.reset больше не ломает id узлов
-t('BUG', 'B01 sim.reset → addNode: id обязан остаться уникальным', () => {
+// (бывшие баги B01–B06 исправлены; тесты оставлены как регрессионные и переведены в OK)
+t('OK', 'B01 sim.reset → addNode: id обязан остаться уникальным', () => {
   R.loadPreset('myproject');
   R.sim.reset();
   const oldIds = {}; R.state.nodes.forEach(n => oldIds[n.id] = true);
@@ -240,7 +244,7 @@ t('BUG', 'B01 sim.reset → addNode: id обязан остаться уника
 });
 
 // B02 renameNode в существующее имя
-t('BUG', 'B02 переименование в существующее имя: отклоняется, дубликат не возникает', () => {
+t('OK', 'B02 переименование в существующее имя: отклоняется, дубликат не возникает', () => {
   buildTopology();
   R.state.nodes.push({ id: 'e9', type: 'exchange', name: 'exB', x: 0, y: 0, exType: 'direct', durable: true, autoDelete: false });
   const r = R.renameNode('e1', 'exB'); // 'ex' → 'exB' (уже существует)
@@ -251,7 +255,7 @@ t('BUG', 'B02 переименование в существующее имя: �
 });
 
 // B03 prefetch=1 нарушается (в transit не учитывается)
-t('BUG', 'B03 prefetch=1: максимум 1 сообщение у потребителя (включая в полёте)', () => {
+t('OK', 'B03 prefetch=1: максимум 1 сообщение у потребителя (включая в полёте)', () => {
   buildTopology();
   R._.byName('c1').prefetch = 1; R._.byName('c1').process = 400;
   R.sim.send('p1', 'a', 3);
@@ -264,7 +268,7 @@ t('BUG', 'B03 prefetch=1: максимум 1 сообщение у потреб�
   }
   assert(max <= 1, 'одновременно у потребителя было ' + max + ' (prefetch=1; transit не считается как unacked)');
 });
-t('BUG', 'B03b prefetch=2: максимум 2 у потребителя', () => {
+t('OK', 'B03b prefetch=2: максимум 2 у потребителя', () => {
   buildTopology();
   R._.byName('c1').prefetch = 2; R._.byName('c1').process = 400;
   R.sim.send('p1', 'a', 4);
@@ -279,7 +283,7 @@ t('BUG', 'B03b prefetch=2: максимум 2 у потребителя', () => 
 });
 
 // B04 удаление очереди с живыми сообщениями
-t('BUG', 'B04 deleteNode(очередь с письмами): письма сняты сразу, без ложного dropped', () => {
+t('OK', 'B04 deleteNode(очередь с письмами): письма сняты сразу, без ложного dropped', () => {
   buildTopology();
   R._.byName('c1').queue = '';
   R.sim.send('p1', 'a', 2);
@@ -293,7 +297,7 @@ t('BUG', 'B04 deleteNode(очередь с письмами): письма сн�
 });
 
 // B05 удаление потребителя во время обработки
-t('BUG', 'B05 deleteNode(потребитель с обрабатываемыми письмами): письма requeue в очередь, не «delivered»', () => {
+t('OK', 'B05 deleteNode(потребитель с обрабатываемыми письмами): письма requeue в очередь, не «delivered»', () => {
   buildTopology();
   R._.byName('c1').prefetch = 5; R._.byName('c1').process = 100000;
   R.sim.send('p1', 'a', 2);
@@ -308,7 +312,7 @@ t('BUG', 'B05 deleteNode(потребитель с обрабатываемым�
 });
 
 // B06 headers не передаются при отправке
-t('BUG', 'B06 sim.send поддерживает заголовки (headers-exchange прокатываем в симуляции)', () => {
+t('OK', 'B06 sim.send поддерживает заголовки (headers-exchange прокатываем в симуляции)', () => {
   const src = fs.readFileSync(path.join(dir, 'core.js'), 'utf8');
   const start = src.indexOf('RMQ.sim.send = function');
   assert(start >= 0, 'функция sim.send не найдена');
@@ -391,5 +395,130 @@ t('OK', 'C06 пустой rk не матчит topic-binding → dropped', () =>
   assert(R.state.counters.dropped === 1, 'dropped=' + R.state.counters.dropped);
 });
 
+console.log('=== ЧАСТЬ D: БЕЗОПАСНОСТЬ И ВАЛИДАЦИЯ ФАЙЛА ===\n');
+
+// D01: exType из файла не должен попадать в состояние произвольной строкой
+t('OK', 'D01 load: exType сводится к белому списку', () => {
+  R.load({ app: 'rabbitmq-designer', version: 1, nodes: [
+    { id: 'n1', type: 'exchange', name: 'ex', x: 0, y: 0, exType: '<img src=x onerror=alert(1)>' }
+  ], links: [] });
+  assert(R.state.nodes[0].exType === 'topic', 'exType=' + R.state.nodes[0].exType);
+});
+
+// D02: неизвестный тип узла и висячие связи отбрасываются
+t('OK', 'D02 load: неизвестный тип узла и висячие связи отбрасываются', () => {
+  R.load({ app: 'rabbitmq-designer', version: 1, nodes: [
+    { id: 'n1', type: 'exchange', name: 'ex', x: 0, y: 0, exType: 'topic' },
+    { id: 'n2', type: 'script', name: 'evil', x: 0, y: 0 }
+  ], links: [{ id: 'l1', source: 'ex', destination: 'ghost', kind: 'binding' }] });
+  assert(R.state.nodes.length === 1, 'узлов=' + R.state.nodes.length);
+  assert(R.state.links.length === 0, 'связей=' + R.state.links.length);
+});
+
+// D03: seq должен учитывать id связей (раньше считался только по узлам)
+t('OK', 'D03 load: seq больше максимального id связи', () => {
+  R.load({ app: 'rabbitmq-designer', version: 1, nodes: [
+    { id: 'n1', type: 'exchange', name: 'ex', x: 0, y: 0, exType: 'topic' },
+    { id: 'n2', type: 'queue', name: 'q', x: 0, y: 0 }
+  ], links: [{ id: 'l9', source: 'ex', destination: 'q', kind: 'binding', rk: 'a' }] });
+  assert(R.state.seq > 9, 'seq=' + R.state.seq + ' (новая связь получит уже занятый id)');
+});
+
+// D04: headers из файла — только собственные примитивы, без загрязнения прототипа
+t('OK', 'D04 load: __proto__ и объекты в headers не сохраняются', () => {
+  R.load({ app: 'rabbitmq-designer', version: 1, nodes: [
+    { id: 'n1', type: 'exchange', name: 'ex', x: 0, y: 0, exType: 'headers' },
+    { id: 'n2', type: 'queue', name: 'q', x: 0, y: 0 }
+  ], links: [{ id: 'l1', source: 'ex', destination: 'q', kind: 'binding', rk: '',
+    headers: { '__proto__': { polluted: 1 }, 'x-match': 'all', ok: 'yes', obj: { a: 1 } } }] });
+  const h = R.state.links[0].headers;
+  assert(!Object.prototype.hasOwnProperty.call(h, '__proto__'), '__proto__ сохранён в headers');
+  assert(h.ok === 'yes', 'обычный заголовок потерян');
+  assert(!Object.prototype.hasOwnProperty.call(h, 'obj'), 'объект сохранён в headers');
+  assert(({}).polluted === undefined, 'прототип загрязнён');
+});
+
+// D05: невалидный package не должен ломать Java-исходник
+t('OK', 'D05 export.java: package всегда валидный Java-идентификатор', () => {
+  buildTopology();
+  R.state.package = 'com.ex; public class X {';
+  const files = R.export.java({ pkg: R.state.package });
+  const key = Object.keys(files).filter(function (k) { return /RabbitMqConstants\.java$/.test(k); })[0];
+  assert(key, 'RabbitMqConstants.java не сгенерирован');
+  assert(/^package [A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*;$/.test(files[key].split('\n')[0]),
+    'первая строка: ' + files[key].split('\n')[0]);
+});
+
+// D06: кавычки в именах не рвут Java-литералы (нет инъекции кода)
+t('OK', 'D06 export.java: кавычки/переводы строк в именах не рвут литералы', () => {
+  buildTopology();
+  const evil = 'q"; System.exit(0); //';
+  R.state.nodes.push({ id: 'q9', type: 'queue', name: evil, x: 0, y: 0, durable: true, autoDelete: false, ttl: 0, dlx: 'ex', xDlrk: 'dead"\nkey' });
+  R.state.links.push({ id: 'l9', source: 'ex', destination: evil, kind: 'binding', rk: 'a"b\nc', headers: {} });
+  const files = R.export.java({});
+  const bad = [];
+  Object.keys(files).filter(function (k) { return /\.java$/.test(k); }).forEach(function (k) {
+    files[k].split('\n').forEach(function (line, i) {
+      let n = 0;
+      for (let j = 0; j < line.length; j++) {
+        if (line[j] === '\\') { j++; continue; }
+        if (line[j] === '"') n++;
+      }
+      if (n % 2) bad.push(k + ':' + (i + 1) + ': ' + line.trim());
+    });
+  });
+  assert(bad.length === 0, 'незакрытый литерал: ' + bad.slice(0, 2).join(' | '));
+});
+
+// D07: коллизии имён (a.b / a-b) не дают одинаковых Java-идентификаторов
+t('OK', 'D07 export.java: a.b и a-b → разные константы и бин-методы', () => {
+  buildTopology();
+  R.state.nodes.push({ id: 'e8', type: 'exchange', name: 'a.b', x: 0, y: 0, exType: 'fanout', durable: true, autoDelete: false });
+  R.state.nodes.push({ id: 'e9', type: 'exchange', name: 'a-b', x: 0, y: 0, exType: 'fanout', durable: true, autoDelete: false });
+  const files = R.export.java({});
+  const all = Object.keys(files).filter(function (k) { return /\.java$/.test(k); }).map(function (k) { return files[k]; }).join('\n');
+  const consts = [].concat.apply([], [...all.matchAll(/public static final String (\w+)/g)].map(function (m) { return [m[1]]; }));
+  assert(consts.length === new Set(consts).size, 'дубли констант: ' + consts.join(', '));
+  const beans = [...all.matchAll(/@Bean\s+\w+\s+(\w+)\(/g)].map(function (m) { return m[1]; });
+  assert(beans.length === new Set(beans).size, 'дубли @Bean: ' + beans.join(', '));
+});
+
+// D08: headersMatch не смотрит на свойства прототипа
+t('OK', 'D08 headersMatch: toString из прототипа не считается заголовком', () => {
+  const ex = { exType: 'headers' };
+  const b = { headers: { 'x-match': 'all', toString: 'x' } };
+  assert(R.bindingMatches(ex, b, '', {}) === false, 'toString сматчился по прототипу');
+});
+
+// D09: published — публикации поставщика, а не каждый exchange-хоп
+t('OK', 'D09 published=1 при цепочке exchange→exchange', () => {
+  buildTopology();
+  R.state.nodes.push({ id: 'e2', type: 'exchange', name: 'ex2', x: 0, y: 0, exType: 'fanout', durable: true, autoDelete: false });
+  R.state.links.push({ id: 'l8', source: 'ex', destination: 'ex2', kind: 'binding', rk: '#', headers: {} });
+  R.state.links.push({ id: 'l9', source: 'ex2', destination: 'q1', kind: 'binding', rk: '', headers: {} });
+  R.sim.send('p1', 'a', 1);
+  runToIdle();
+  assert(R.state.counters.published === 1, 'published=' + R.state.counters.published);
+});
+
+// D10: переименование обновляет имена в сообщениях «в полёте»
+t('OK', 'D10 renameNode обновляет fromName/toName/consumer/queueName', () => {
+  buildTopology();
+  R.sim.send('p1', 'a', 1); // сообщение летит p1 → ex
+  R.renameNode('e1', 'exNew');
+  const m = R.state.messages[0];
+  assert(m && m.loc.toName === 'exNew', 'toName=' + (m && m.loc.toName));
+});
+
+// D11: load не мутирует входной объект (его сохраняют в projects как есть)
+t('OK', 'D11 load: не мутирует переданный объект', () => {
+  const src = { app: 'rabbitmq-designer', version: 1, nodes: [
+    { type: 'exchange', name: 'ex', x: 0, y: 0, exType: 'topic' }
+  ], links: [] };
+  R.load(src);
+  assert(src.nodes[0].id === undefined, 'load дописал id во входной объект');
+});
+
 console.log(results.join('\n'));
 console.log('\nИТОГО: ok=' + okC + '  bugs-воспроизведено=' + bugC + '  unexpected/errors=' + errC);
+process.exitCode = (bugC + errC) ? 1 : 0;

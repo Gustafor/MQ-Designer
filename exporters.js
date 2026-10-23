@@ -71,6 +71,47 @@
     base = base.charAt(0).replace(/[0-9]/, 'x') + base.slice(1);
     return base;
   }
+  // Один реестр на экспорт: a.b и a-b не должны дать одинаковый Java-идентификатор.
+  function beanRegistry() {
+    var map = {}, used = {};
+    return function (name) {
+      if (Object.prototype.hasOwnProperty.call(map, name)) return map[name];
+      var base = beanName(name), v = base, i = 2;
+      while (used[v]) { v = base + '_' + i; i++; }
+      used[v] = true;
+      map[name] = v;
+      return v;
+    };
+  }
+  function constRegistry() {
+    var used = {};
+    return function (prefix, name) {
+      var base = prefix + '_' + beanName(name).toUpperCase(), v = base, i = 2;
+      while (used[v]) { v = base + '_' + i; i++; }
+      used[v] = true;
+      return v;
+    };
+  }
+  // Пакет должен быть валидным Java-идентификатором, иначе generated-код не соберётся.
+  function javaPkg(p) {
+    var out = [];
+    String(p || '').split('.').forEach(function (seg) {
+      seg = seg.replace(/[^A-Za-z0-9_$]/g, '_');
+      if (!seg) return;
+      if (/^[0-9]/.test(seg)) seg = '_' + seg;
+      out.push(seg);
+    });
+    return out.length ? out.join('.') : 'com.myproject.rabbitmq';
+  }
+  // Строка внутри Java-литерала: кавычки/слэши экранируются, переводы строк не рвут литерал.
+  function jstr(s) { return esc(String(s == null ? '' : s).replace(/[\r\n\t]+/g, ' ')); }
+  function consumerClass(name) {
+    var s = String(name || '').replace(/[^A-Za-z0-9_]/g, '');
+    if (!s) s = 'queue';
+    s = s.charAt(0).toUpperCase() + s.slice(1);
+    if (/^[0-9]/.test(s)) s = 'C' + s;
+    return s + 'Consumer';
+  }
   // метод-геттер уникален внутри класса
   function accessor(name, used) {
     var n = 'get' + name.charAt(0).toUpperCase() + name.slice(1).replace(/[^A-Za-z0-9]+/g, '_');
@@ -80,9 +121,11 @@
   RMQ.export.java = function (opts) {
     opts = opts || {};
     var s = RMQ.state;
-    var pkg = (opts.pkg || s.package || 'com.myproject.rabbitmq').replace(/^\.+|\.+$/g, '');
+    var pkg = javaPkg(opts.pkg || s.package || 'com.myproject.rabbitmq');
     var pkgPath = pkg.replace(/\./g, '/');
     var base = pkg.split('.').slice(-1)[0] || 'app';
+    var bean = beanRegistry();
+    var constFor = constRegistry();
     var T = I18N.tr(s.lang);
     var files = {};
     // имена классов (плоские, как в проекте)
@@ -96,21 +139,23 @@
     var exNodes = s.nodes.filter(function (n) { return n.type === 'exchange' && n.name; });
     var qNodes = s.nodes.filter(function (n) { return n.type === 'queue' && n.name; });
     c.push('    // ── Exchanges ──');
-    exNodes.forEach(function (n) { c.push('    public static final String EX_' + beanName(n.name).toUpperCase().replace(/^X?_?/, 'EX_') + ' = "' + n.name + '";'); });
+    exNodes.forEach(function (n) { c.push('    public static final String ' + constFor('EX', n.name) + ' = "' + jstr(n.name) + '";'); });
     c.push(''); c.push('    // ── Queues ──');
-    qNodes.forEach(function (n) { c.push('    public static final String Q_' + beanName(n.name).toUpperCase().replace(/^Q_?/, 'Q_') + ' = "' + n.name + '";'); });
+    qNodes.forEach(function (n) { c.push('    public static final String ' + constFor('Q', n.name) + ' = "' + jstr(n.name) + '";'); });
     c.push(''); c.push('    // ── Routing keys (из bindings) ──');
     var rkSet = {};
     s.links.forEach(function (l) { if (l.kind === 'binding' && l.rk) rkSet[l.rk] = (rkSet[l.rk] || 0) + 1; });
-    var rkN = 1;
+    var rkN = 1, rkUsed = {};
     Object.keys(rkSet).sort().forEach(function (rk) {
-      var v = rk.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-      if (!v || /^[0-9]/.test(v)) v = 'RK' + rkN; else v = 'RK_' + v.toUpperCase();
-      while (c.some(function (x) { return x.indexOf(' = "' + rk + '"') >= 0; })) v = v + '_' + rkN;
-      c.push('    public static final String ' + v + ' = "' + rk + '";'); rkN++;
+      var v = rk.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+      if (!v || /^[0-9]/.test(v)) v = 'RK' + (rkN++); else v = 'RK_' + v;
+      var baseRk = v, i = 2;
+      while (rkUsed[v]) { v = baseRk + '_' + i; i++; }
+      rkUsed[v] = true;
+      c.push('    public static final String ' + v + ' = "' + jstr(rk) + '";');
     });
     c.push('    // ── Envelope ──');
-    c.push('    public static final String APP_SOURCE = "' + (base) + '";');
+    c.push('    public static final String APP_SOURCE = "' + jstr(base) + '";');
     c.push('}');
     files['src/main/java/' + pkgPath + '/' + CN + '.java'] = c.join('\n');
 
@@ -132,24 +177,24 @@
       'public class ' + CC + ' {', ''];
     // exchanges
     exNodes.forEach(function (n) {
-      var b = beanName(n.name);
+      var b = bean(n.name);
       var ctor = { topic: 'new TopicExchange', direct: 'new DirectExchange', fanout: 'new FanoutExchange', headers: 'new HeadersExchange' }[n.exType] || 'new TopicExchange';
       var exCls = { topic: 'TopicExchange', direct: 'DirectExchange', fanout: 'FanoutExchange', headers: 'HeadersExchange' }[n.exType] || 'TopicExchange';
       cfg.push('    @Bean ' + exCls + ' ' + b + '() {');
       cfg.push('        // type=' + (n.exType || 'topic') + ', durable=' + (n.durable !== false) + ', auto_delete=' + (!!n.autoDelete));
-      cfg.push('        return ' + ctor + '("' + n.name + '", ' + (n.durable !== false) + ', ' + (!!n.autoDelete) + ');');
+      cfg.push('        return ' + ctor + '("' + jstr(n.name) + '", ' + (n.durable !== false) + ', ' + (!!n.autoDelete) + ');');
       cfg.push('    }');
       cfg.push('');
     });
     // queues
     qNodes.forEach(function (n) {
-      var b = beanName(n.name);
+      var b = bean(n.name);
       cfg.push('    @Bean Queue ' + b + '() {');
       cfg.push('        // durable=' + (n.durable !== false) + ', auto_delete=' + (!!n.autoDelete) + (n.dlx ? ', DLX=' + n.dlx : '') + (n.ttl > 0 ? ', TTL=' + n.ttl : ''));
-      var q = 'QueueBuilder.durable("' + n.name + '").autoDelete(' + (!!n.autoDelete) + ')';
-      if (n.dlx) q += '.withArgument("x-dead-letter-exchange", "' + n.dlx + '")';
-      if (n.xDlrk && n.xDlrk !== '') q += '.withArgument("x-dead-letter-routing-key", "' + n.xDlrk + '")';
-      if (n.ttl > 0) q += '.withArgument("x-message-ttl", ' + n.ttl + ')';
+      var q = 'QueueBuilder.durable("' + jstr(n.name) + '").autoDelete(' + (!!n.autoDelete) + ')';
+      if (n.dlx) q += '.withArgument("x-dead-letter-exchange", "' + jstr(n.dlx) + '")';
+      if (n.xDlrk && n.xDlrk !== '') q += '.withArgument("x-dead-letter-routing-key", "' + jstr(n.xDlrk) + '")';
+      if (n.ttl > 0) q += '.withArgument("x-message-ttl", ' + (Number(n.ttl) || 0) + ')';
       cfg.push('        return ' + q + '.build();');
       cfg.push('    }');
       cfg.push('');
@@ -160,9 +205,9 @@
     var bn = 0;
     s.links.forEach(function (l) {
       if (l.kind !== 'binding') return;
-      var sb = beanName(l.source), db = beanName(l.destination);
+      var sb = bean(l.source), db = bean(l.destination);
       var destIsQueue = !!qNames[l.destination];
-      var destRef = destIsQueue ? ('queue(' + db + '())') : ('exchange("' + l.destination + '")');
+      var destRef = destIsQueue ? ('queue(' + db + '())') : ('exchange("' + jstr(l.destination) + '")');
       var srcRef = sb + '()'; // source = exchange
       bn++;
       var rkSafe = (l.rk || '').replace(/[^A-Za-z0-9]+/g, '');
@@ -172,10 +217,10 @@
         var hdr = Object.keys(l.headers).filter(function (k) { return k !== 'x-match'; });
         var args = { 'x-match': (l.headers['x-match'] || 'all') };
         hdr.forEach(function (k) { args[k] = l.headers[k]; });
-        var argsStr = Object.keys(args).map(function (k) { return '.withArgument("' + k + '","' + args[k] + '")'; }).join('');
-        cfg.push('        return BindingBuilder.bind(' + destRef + ').to(' + srcRef + ').' + (l.rk ? 'with("' + l.rk + '")' : '') + argsStr + ';');
+        var argsStr = Object.keys(args).map(function (k) { return '.withArgument("' + jstr(k) + '","' + jstr(args[k]) + '")'; }).join('');
+        cfg.push('        return BindingBuilder.bind(' + destRef + ').to(' + srcRef + ').' + (l.rk ? 'with("' + jstr(l.rk) + '")' : '') + argsStr + ';');
       } else {
-        cfg.push('        return BindingBuilder.bind(' + destRef + ').to(' + srcRef + ').' + (l.rk ? 'with("' + l.rk + '")' : '') + ';');
+        cfg.push('        return BindingBuilder.bind(' + destRef + ').to(' + srcRef + ').' + (l.rk ? 'with("' + jstr(l.rk) + '")' : '') + ';');
       }
       cfg.push('    }');
       cfg.push('');
@@ -193,8 +238,6 @@
     cfg.push('        return t;');
     cfg.push('    }');
     cfg.push('}');
-    function xrkC(n) { return (n.xDlrk && n.xDlrk !== '') ? '.withArgument("x-dead-letter-routing-key","' + n.xDlrk + '")' : ''; }
-    function exchangeRef(l) { var sb = beanName(l.source); return sb + '()'; }
     files['src/main/java/' + pkgPath + '/' + CC + '.java'] = cfg.join('\n');
 
     // ---- AppEvent.java (envelope)
@@ -263,9 +306,9 @@
     // ---- listeners (по каждой очереди, у которой есть consumer)
     var consumers = s.nodes.filter(function (n) { return n.type === 'consumer' && n.queue && qNodes.some(function (x) { return x.name === n.queue; }); });
     consumers.forEach(function (cn) {
-      var cls = cn.name.replace(/[^A-Za-z0-9_]+/g, '').replace(/^_+/, '').replace(/^(.*)$/, function (m) { return m.charAt(0).toUpperCase() + m.slice(1); }) + 'Consumer';
+      var cls = consumerClass(cn.name);
       while (files['src/main/java/' + pkgPath + '/' + cls + '.java']) cls += 'X';
-      var qname = cn.queue;
+      var qname = jstr(cn.queue);
       files['src/main/java/' + pkgPath + '/' + cls + '.java'] = [
         'package ' + pkg + ';', '',
         'import org.springframework.amqp.core.Message;',
@@ -274,7 +317,7 @@
         'import org.springframework.stereotype.Component;',
         'import com.rabbitmq.client.Channel; import java.io.IOException;',
         '',
-        '// Consumer для очереди «' + qname + '». acknowledge-mode: manual.',
+        '// Consumer для очереди «' + String(cn.queue).replace(/[\r\n]+/g, ' ') + '». acknowledge-mode: manual.',
         '// Логика: parse envelope → дедуп по id → обработка → basicAck; при ошибке basicNack',
         '// (retry в yml, потом DLX). ЗАГОТОВКА — замени тело handle() на реальную доставку.',
         '@Component',
